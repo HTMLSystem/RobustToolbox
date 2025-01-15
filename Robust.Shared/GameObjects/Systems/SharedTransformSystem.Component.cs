@@ -107,6 +107,11 @@ public abstract partial class SharedTransformSystem
         return AnchorEntity(uid, xform, grid.Owner, grid, tileIndices);
     }
 
+    public bool AnchorEntity(EntityUid uid)
+    {
+        return AnchorEntity(uid, XformQuery.GetComponent(uid));
+    }
+
     public bool AnchorEntity(EntityUid uid, TransformComponent xform)
     {
         return AnchorEntity((uid, xform));
@@ -125,6 +130,11 @@ public abstract partial class SharedTransformSystem
 
         var tileIndices =  _map.TileIndicesFor(grid.Value, grid.Value, entity.Comp.Coordinates);
         return AnchorEntity(entity, grid.Value, tileIndices);
+    }
+
+    public void Unanchor(EntityUid uid)
+    {
+        Unanchor(uid, XformQuery.GetComponent(uid));
     }
 
     public void Unanchor(EntityUid uid, TransformComponent xform, bool setPhysics = true)
@@ -192,7 +202,7 @@ public abstract partial class SharedTransformSystem
 
     #region Component Lifetime
 
-    private (EntityUid?, MapId) InitializeMapUid(EntityUid uid, TransformComponent xform)
+    internal (EntityUid?, MapId) InitializeMapUid(EntityUid uid, TransformComponent xform)
     {
         if (xform._mapIdInitialized)
             return (xform.MapUid, xform.MapID);
@@ -544,7 +554,7 @@ public abstract partial class SharedTransformSystem
 
             if (newParent != null)
             {
-                xform.ChangeMapId(newParent.MapID, XformQuery);
+                ChangeMapId(uid, xform, meta, newParent.MapID);
 
                 if (!xform._gridInitialized)
                     InitializeGridUid(uid, xform);
@@ -557,7 +567,7 @@ public abstract partial class SharedTransformSystem
             }
             else
             {
-                xform.ChangeMapId(MapId.Nullspace, XformQuery);
+                ChangeMapId(uid, xform, meta, MapId.Nullspace);
                 if (!xform._gridInitialized)
                     InitializeGridUid(uid, xform);
                 else
@@ -595,6 +605,22 @@ public abstract partial class SharedTransformSystem
         TransformComponent? oldParent = null)
     {
         SetCoordinates((uid, xform, _metaQuery.GetComponent(uid)), value, rotation, unanchor, newParent, oldParent);
+    }
+
+    private void ChangeMapId(EntityUid uid, TransformComponent xform, MetaDataComponent meta, MapId newMapId)
+    {
+        if (newMapId == xform.MapID)
+            return;
+
+        EntityUid? newUid = newMapId == MapId.Nullspace ? null : _map.GetMap(newMapId);
+
+        //Set Paused state
+        var mapPaused = _map.IsPaused(newMapId);
+        _metaData.SetEntityPaused(uid, mapPaused, meta);
+
+        xform.MapUid = newUid;
+        xform.MapID = newMapId;
+        xform.UpdateChildMapIdsRecursive(newMapId, newUid, mapPaused, XformQuery, _metaQuery, _metaData);
     }
 
     #endregion
@@ -693,8 +719,7 @@ public abstract partial class SharedTransformSystem
             component.LocalRotation,
             parent,
             component.NoLocalRotation,
-            component.Anchored,
-            component.GridTraversal);
+            component.Anchored);
     }
 
     internal void OnHandleState(EntityUid uid, TransformComponent xform, ref ComponentHandleState args)
@@ -1080,13 +1105,6 @@ public abstract partial class SharedTransformSystem
     #endregion
 
     #region Set Position+Rotation
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    [Obsolete("Use override with EntityUid")]
-    public void SetWorldPositionRotation(TransformComponent component, Vector2 worldPos, Angle worldRot)
-    {
-        SetWorldPositionRotation(component.Owner, worldPos, worldRot, component);
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetWorldPositionRotation(EntityUid uid, Vector2 worldPos, Angle worldRot, TransformComponent? component = null)
@@ -1588,7 +1606,7 @@ public abstract partial class SharedTransformSystem
         }
         else if (pos2 != null)
         {
-            var mapUid = _mapManager.GetMapEntityId(pos2.Value.MapId);
+            var mapUid = _map.GetMapOrInvalid(pos2.Value.MapId);
 
             if (!_gridQuery.HasComponent(entity1) && _mapManager.TryFindGridAt(mapUid, pos2.Value.Position, out var targetGrid, out _))
             {
@@ -1611,7 +1629,7 @@ public abstract partial class SharedTransformSystem
         }
         else if (pos1 != null)
         {
-            var mapUid = _mapManager.GetMapEntityId(pos1.Value.MapId);
+            var mapUid = _map.GetMapOrInvalid(pos1.Value.MapId);
 
             if (!_gridQuery.HasComponent(entity1) && _mapManager.TryFindGridAt(mapUid, pos1.Value.Position, out var targetGrid, out _))
             {
